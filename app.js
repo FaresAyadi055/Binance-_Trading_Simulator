@@ -1,7 +1,7 @@
 'use strict';
 const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
 const KEY='bsim.tx.v1', REST='https://api.binance.com/api/v3';
-const CFG={feeRate:0.001, gasUnits:200000, gasPriceGwei:3, missMinUSDT:1, missMinPct:0.005}; // gas, 0.1% spot fee, missed-peak floor
+const CFG={feeRate:0.001, gasUnits:200000, gasPriceGwei:3, missMinUSDT:0.01, missMinPct:0.002}; // peak must beat "sell now" by a round trip (2 × fee) to qualify, never less than 1¢
 let txs=load(), sym='BTC', side='buy', klines=[], ws, estTimer, busy=false, kToken=0;
 const px={}, open={}, vol={};
 
