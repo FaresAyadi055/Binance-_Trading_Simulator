@@ -1,7 +1,7 @@
 'use strict';
 const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
 const KEY='bsim.tx.v1', REST='https://api.binance.com/api/v3';
-const CFG={feeRate:0.001, gasUnits:200000, gasPriceGwei:3, missMinUSDT:0.01, missMinPct:0.002}; // peak must beat "sell now" by a round trip (2 × fee) to qualify, never less than 1¢
+const CFG={feeRate:0.001, gasUnits:200000, gasPriceGwei:3, slipPct:0.0005, missMinUSDT:0.01, missMinPct:0.002}; // 0.1% spot fee, 5bp assumed exit slippage, missed-peak floor
 let txs=load(), sym='BTC', side='buy', klines=[], ws, estTimer, busy=false, kToken=0;
 const px={}, open={}, vol={};
 
@@ -56,6 +56,8 @@ async function loadKlines(){
 async function seedPrices(){
   try{const r=await(await fetch(`${REST}/ticker/price`)).json();for(const t of r)if(t.symbol.endsWith('USDT'))px[t.symbol.slice(0,-4)]??=+t.price;live()}catch{}
 }
+// Gas and the live mark are priced off the ticker: wait for it so a chart is never built gas-less.
+const priced=async k=>{for(let i=0;i<40&&(!px[k]||!px.BNB);i++)await new Promise(r=>setTimeout(r,100))};
 // Fill simulation: walk the real order book (depth 1000) => genuine slippage.
 async function fill(sd,amount){
   const[d,{serverTime:ts}]=await Promise.all([fetch(`${REST}/depth?symbol=${sym}USDT&limit=1000`).then(r=>r.json()),fetch(`${REST}/time`).then(r=>r.json())]);
@@ -122,6 +124,8 @@ let msig=null;
 const lastBuy=k=>{let t=0;for(const x of txs)if(x.action==='buy'&&x.currency===k&&x.timestamp>t)t=x.timestamp;return t};
 const ivFor=ms=>{for(const[sp,iv]of IVS)if(ms<=sp*1000)return iv;return '1M'};
 const netOf=(q,p)=>q*p*(1-CFG.feeRate)-gasUSDT();
+// Net proceeds an exit must reach to be profitable: what the position cost (fees + gas included) plus the slippage of selling it.
+const beOf=k=>{const p=derive(txs).pos[k];return p?p.cost+p.qty*(px[k]||0)*CFG.slipPct:0};
 // Best sellable price per candle (high) since the last buy => net USDT after fees & gas.
 async function mseries(k){
   const from=lastBuy(k),key=`${k}|${from}`,hit=MC.get(key);if(hit)return hit;
@@ -138,8 +142,11 @@ function buildMissed(k,qty,s){
   const el=$(`#missed [data-k="${k}"]`);if(!el)return;
   const span=Date.now()-s.t0,nowP=px[k]||(s.pts.length?s.pts[s.pts.length-1].p:0),pts=s.pts.concat({t:Date.now(),p:nowP});
   if(pts.length<2||!nowP){el.innerHTML=`<div class="mh"><b>${k}</b><span class="msub">${+qty.toFixed(8)} ${k}</span></div><p class="est">Bought moments ago — no candles yet. Hit Refresh in a minute.</p>`;return}
-  const vals=pts.map(x=>netOf(qty,x.p)),now=vals[vals.length-1];
-  const lo=Math.min(...vals),hi=Math.max(...vals);
+  const vals=pts.map(x=>netOf(qty,x.p)),now=vals[vals.length-1],be=beOf(k);
+  let lo=Math.min(...vals),hi=Math.max(...vals);
+  // Lift the ceiling (or floor) so the break-even line always fits on the canvas.
+  if(be>hi)hi=be+((hi-lo)*.15||1);
+  if(be<lo)lo=be-((hi-lo)*.15||1);
   let pi=0;for(let i=1;i<vals.length;i++)if(vals[i]>vals[pi])pi=i;
   const sm=thin(pts.map((p,i)=>({t:p.t,v:vals[i]})));
   // Wide canvas (~7px per point, capped) so the chart pans instead of squashing.
@@ -157,7 +164,7 @@ function buildMissed(k,qty,s){
   for(const q of keep){const j=sm.findIndex(o=>o.t>=q.t);if(j>=0)sm[j]={t:q.t,v:q.net}}
   const d=sm.map((q,i)=>(i?'L':'M')+X(q.t).toFixed(1)+' '+Y(q.v).toFixed(1)).join(' ');
   const best=keep.length?keep.reduce((a,b)=>a.net>b.net?a:b):null,st=best||{t:pts[pi].t,p:pts[pi].p},miss=best?Math.max(0,best.net-now):0;
-  el.dataset.qty=qty;el.dataset.peak=best?best.net:0;el.dataset.lo=lo;el.dataset.hi=hi;
+  el.dataset.qty=qty;el.dataset.peak=best?best.net:0;el.dataset.lo=lo;el.dataset.hi=hi;el.dataset.be=be;
   el._peaks=keep.map(q=>({t:q.t,p:q.p,net:q.net,x:q.x,gross:qty*q.p,fee:qty*q.p*CFG.feeRate+gasUSDT()}));
   el._best=best;el._sel=-1;
   const dots=keep.map((q,i)=>`<circle class="pdot" cx="${q.x.toFixed(1)}" cy="${Y(q.net).toFixed(1)}" r="3.5" fill="var(--up)"/>
@@ -166,6 +173,7 @@ function buildMissed(k,qty,s){
     <div class="mscroll"><svg class="mchart" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" role="group" aria-label="${k}: best net liquidation value since last buy">
       <path d="${d} L ${X(t1).toFixed(1)} ${H-P} L ${X(t0).toFixed(1)} ${H-P} Z" fill="var(--ac)" opacity=".08"/>
       <line data-now x1="${P}" x2="${W-P}" y1="${Y(now).toFixed(1)}" y2="${Y(now).toFixed(1)}" stroke="var(--mu)" stroke-dasharray="3 3"/>
+      <line data-be x1="${P}" x2="${W-P}" y1="${Y(be).toFixed(1)}" y2="${Y(be).toFixed(1)}" stroke="var(--${be<=now?'up':'dn'})" stroke-width="1" stroke-dasharray="8 3" opacity=".85"><title>Break-even exit: ${fmt(be)} USDT net, after fee, gas and slippage</title></line>
       <path d="${d}" fill="none" stroke="var(--ac)" stroke-width="1.5" stroke-linejoin="round"/>
       ${best?`<line data-guide x1="${best.x.toFixed(1)}" x2="${best.x.toFixed(1)}" y1="${P}" y2="${H-P}" stroke="var(--up)" stroke-dasharray="2 4" opacity=".3"/>`:''}
       ${dots}
@@ -175,6 +183,8 @@ function buildMissed(k,qty,s){
       <div><small>Net if sold now</small><b data-nowv>${fmt(now)}</b></div>
       <div><small>Peak price</small><b>${pf(st.p)}</b></div>
       <div><small>Peak on</small><b>${stamp(st.t,span)}</b></div>
+      <div><small>Break-even exit</small><b data-bev class="${be<=now?'up':'dn'}" title="Net proceeds needed to cover the fee, gas and slippage">${fmt(be)}</b></div>
+      <div><small>Gap to break-even</small><b data-gapv class="${be-now>0.005?'dn':'up'}">${be-now>0.005?fmt(be-now)+' USDT':'—'}</b></div>
     </div>
     <div class="pdet" hidden></div>`;
   // Open centred on the best peak (or the present, if nothing cleared the floor).
@@ -186,15 +196,15 @@ function buildMissed(k,qty,s){
 function selPeak(el,d,i){
   const q=el._peaks&&el._peaks[i];if(!q)return;
   const now=netOf(+el.dataset.qty,px[el.dataset.k]||0),m=Math.max(0,q.net-now);
-  // Green only if exiting here would clear the whole position's cost (entry fees included).
-  const cost=(derive(txs).pos[el.dataset.k]||{}).cost||0,covers=q.net>=cost;
+  // Green only if exiting here would clear the break-even level, i.e. cost + exit fees, gas and slippage.
+  const be=beOf(el.dataset.k),covers=q.net>=be;
   el._sel=i;d.hidden=false;
   d.innerHTML=`<div class="ph">Peak ${i+1} of ${el._peaks.length}<button class="px" aria-label="Close">×</button></div>
     <div><small>Exit time</small><b>${new Date(q.t).toLocaleString()}</b></div>
     <div><small>Exit price</small><b>${pf(q.p)}</b></div>
     <div><small>Gross proceeds</small><b>${fmt(q.gross)} USDT</b></div>
     <div><small>Fee + gas</small><b>${fmt(q.fee,4)} USDT</b></div>
-    <div><small>Net received</small><b class="${covers?'up':'dn'}" title="${covers?'Clears':'Does not clear'} the ${fmt(cost)} USDT you paid, fees included">${fmt(q.net)} USDT</b></div>
+    <div><small>Net received</small><b class="${covers?'up':'dn'}" title="${covers?'Clears':'Does not clear'} the ${fmt(be)} USDT break-even (fee, gas and slippage included)">${fmt(q.net)} USDT</b></div>
     <div><small>Vs. now</small><b data-missv2 class="${m>0.005?'up':'mu'}">${m>0.005?'+':''}${fmt(m)} USDT</b></div>`;
   const g=el.querySelector('[data-guide]');if(g){g.setAttribute('x1',q.x.toFixed(1));g.setAttribute('x2',q.x.toFixed(1))}
   el.querySelectorAll('.pdot').forEach((c,j)=>c.setAttribute('r',j===i?5:3.5));
@@ -218,7 +228,13 @@ function updateMissed(){
       const m=Math.max(0,el._peaks[el._sel].net-now);sel.textContent=num(m);sel.className=m>0.005?'up':'mu'}
     const nv=el.querySelector('[data-nowv]');if(nv)nv.textContent=fmt(now);
     const l=el.querySelector('[data-now]');
-    if(l){const y=MY(now,+el.dataset.lo,+el.dataset.hi).toFixed(1);l.setAttribute('y1',y);l.setAttribute('y2',y)}
+    if(l){const y=Math.max(5,Math.min(91,MY(now,+el.dataset.lo,+el.dataset.hi))).toFixed(1);l.setAttribute('y1',y);l.setAttribute('y2',y)}
+    // The break-even line only changes colour as the price crosses it; the level itself is fixed until the next build.
+    const be=+el.dataset.be||0,bl=el.querySelector('[data-be]');
+    if(bl)bl.setAttribute('stroke',`var(--${now>=be?'up':'dn'})`);
+    const bev=el.querySelector('[data-bev]');if(bev)bev.className=now>=be?'up':'dn';
+    const gapv=el.querySelector('[data-gapv]'),gap=be-now;
+    if(gapv){gapv.textContent=gap>0.005?fmt(gap)+' USDT':'—';gapv.className=gap>0.005?'dn':'up'}
   }
 }
 async function renderMissed(force){
@@ -230,7 +246,7 @@ async function renderMissed(force){
   if(!rows.length){box.innerHTML='<p class="est">No open positions yet. Buy something and its best sell value will show up here.</p>';return}
   box.innerHTML=rows.map(([k,p])=>`<div class="mcard" data-k="${k}"><div class="mh"><b>${k}</b><span class="msub">${+p.qty.toFixed(8)} ${k}</span></div><p class="est">Loading history…</p></div>`).join('');
   await Promise.all(rows.map(async([k,p])=>{
-    try{buildMissed(k,p.qty,await mseries(k))}
+    try{const s=await mseries(k);await priced(k);buildMissed(k,p.qty,s)}
     catch{const el=$(`#missed [data-k="${k}"]`),lp=el&&el.querySelector('p');if(lp)lp.textContent='Could not load history from Binance.'}
   }));
 }
