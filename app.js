@@ -186,13 +186,15 @@ function buildMissed(k,qty,s){
 function selPeak(el,d,i){
   const q=el._peaks&&el._peaks[i];if(!q)return;
   const now=netOf(+el.dataset.qty,px[el.dataset.k]||0),m=Math.max(0,q.net-now);
+  // Green only if exiting here would clear the whole position's cost (entry fees included).
+  const cost=(derive(txs).pos[el.dataset.k]||{}).cost||0,covers=q.net>=cost;
   el._sel=i;d.hidden=false;
   d.innerHTML=`<div class="ph">Peak ${i+1} of ${el._peaks.length}<button class="px" aria-label="Close">×</button></div>
     <div><small>Exit time</small><b>${new Date(q.t).toLocaleString()}</b></div>
     <div><small>Exit price</small><b>${pf(q.p)}</b></div>
     <div><small>Gross proceeds</small><b>${fmt(q.gross)} USDT</b></div>
     <div><small>Fee + gas</small><b>${fmt(q.fee,4)} USDT</b></div>
-    <div><small>Net received</small><b>${fmt(q.net)} USDT</b></div>
+    <div><small>Net received</small><b class="${covers?'up':'dn'}" title="${covers?'Clears':'Does not clear'} the ${fmt(cost)} USDT you paid, fees included">${fmt(q.net)} USDT</b></div>
     <div><small>Vs. now</small><b data-missv2 class="${m>0.005?'up':'mu'}">${m>0.005?'+':''}${fmt(m)} USDT</b></div>`;
   const g=el.querySelector('[data-guide]');if(g){g.setAttribute('x1',q.x.toFixed(1));g.setAttribute('x2',q.x.toFixed(1))}
   el.querySelectorAll('.pdot').forEach((c,j)=>c.setAttribute('r',j===i?5:3.5));
