@@ -1,7 +1,7 @@
 'use strict';
 const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
 const KEY='bsim.tx.v1', REST='https://api.binance.com/api/v3';
-const CFG={feeRate:0.001, gasUnits:200000, gasPriceGwei:3}; // BNB-network gas, 0.1% spot fee
+const CFG={feeRate:0.001, gasUnits:200000, gasPriceGwei:3, missMinUSDT:1, missMinPct:0.005}; // gas, 0.1% spot fee, missed-peak floor
 let txs=load(), sym='BTC', side='buy', klines=[], ws, estTimer, busy=false, kToken=0;
 const px={}, open={}, vol={};
 
@@ -138,38 +138,85 @@ function buildMissed(k,qty,s){
   const el=$(`#missed [data-k="${k}"]`);if(!el)return;
   const span=Date.now()-s.t0,nowP=px[k]||(s.pts.length?s.pts[s.pts.length-1].p:0),pts=s.pts.concat({t:Date.now(),p:nowP});
   if(pts.length<2||!nowP){el.innerHTML=`<div class="mh"><b>${k}</b><span class="msub">${+qty.toFixed(8)} ${k}</span></div><p class="est">Bought moments ago — no candles yet. Hit Refresh in a minute.</p>`;return}
-  const vals=pts.map(x=>netOf(qty,x.p));
-  let pi=0;for(let i=1;i<vals.length;i++)if(vals[i]>vals[pi])pi=i;
-  const peak=vals[pi],now=vals[vals.length-1],miss=Math.max(0,peak-now);
+  const vals=pts.map(x=>netOf(qty,x.p)),now=vals[vals.length-1];
   const lo=Math.min(...vals),hi=Math.max(...vals);
-  const W=300,H=96,P=5,t0=s.t0,t1=pts[pts.length-1].t;
-  const X=t=>((t-t0)/((t1-t0)||1))*(W-2*P)+P,Y=v=>MY(v,lo,hi);
+  let pi=0;for(let i=1;i<vals.length;i++)if(vals[i]>vals[pi])pi=i;
   const sm=thin(pts.map((p,i)=>({t:p.t,v:vals[i]})));
-  const near=sm.findIndex(q=>q.t>=pts[pi].t);if(near>=0)sm[near]={t:pts[pi].t,v:peak};
+  // Wide canvas (~7px per point, capped) so the chart pans instead of squashing.
+  const H=96,P=5,W=Math.round(Math.min(1800,Math.max(340,sm.length*7))),t0=s.t0,t1=pts[pts.length-1].t;
+  const X=t=>((t-t0)/((t1-t0)||1))*(W-2*P)+P,Y=v=>MY(v,lo,hi);
+  // Every swing high that would have beaten selling now by more than the floor, one dot per episode.
+  const thr=Math.max(CFG.missMinUSDT,qty*nowP*CFG.missMinPct),keep=[];
+  for(let i=2;i<vals.length-2;i++){
+    if(vals[i]-now<thr)continue;
+    let top=true;for(let j=i-2;j<=i+2;j++)if(vals[j]>vals[i]){top=false;break}
+    if(!top)continue;
+    const q={t:pts[i].t,p:pts[i].p,net:vals[i],x:X(pts[i].t)},last=keep[keep.length-1];
+    if(last&&q.x-last.x<30){if(q.net>last.net)keep[keep.length-1]=q}else keep.push(q);
+  }
+  for(const q of keep){const j=sm.findIndex(o=>o.t>=q.t);if(j>=0)sm[j]={t:q.t,v:q.net}}
   const d=sm.map((q,i)=>(i?'L':'M')+X(q.t).toFixed(1)+' '+Y(q.v).toFixed(1)).join(' ');
-  el.dataset.qty=qty;el.dataset.peak=peak;el.dataset.lo=lo;el.dataset.hi=hi;
+  const best=keep.length?keep.reduce((a,b)=>a.net>b.net?a:b):null,st=best||{t:pts[pi].t,p:pts[pi].p},miss=best?Math.max(0,best.net-now):0;
+  el.dataset.qty=qty;el.dataset.peak=best?best.net:0;el.dataset.lo=lo;el.dataset.hi=hi;
+  el._peaks=keep.map(q=>({t:q.t,p:q.p,net:q.net,x:q.x,gross:qty*q.p,fee:qty*q.p*CFG.feeRate+gasUSDT()}));
+  el._best=best;el._sel=-1;
+  const dots=keep.map((q,i)=>`<circle class="pdot" cx="${q.x.toFixed(1)}" cy="${Y(q.net).toFixed(1)}" r="3.5" fill="var(--up)"/>
+      <circle class="phit" data-pk="${i}" cx="${q.x.toFixed(1)}" cy="${Y(q.net).toFixed(1)}" r="13"><title>Peak ${i+1}: exit data</title></circle>`).join('');
   el.innerHTML=`<div class="mh"><b>${k}</b><span class="msub">${+qty.toFixed(8)} ${k}</span></div>
-    <svg class="mchart" viewBox="0 0 ${W} ${H}" role="img" aria-label="${k}: best net liquidation value since last buy">
+    <div class="mscroll"><svg class="mchart" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" role="group" aria-label="${k}: best net liquidation value since last buy">
       <path d="${d} L ${X(t1).toFixed(1)} ${H-P} L ${X(t0).toFixed(1)} ${H-P} Z" fill="var(--ac)" opacity=".08"/>
       <line data-now x1="${P}" x2="${W-P}" y1="${Y(now).toFixed(1)}" y2="${Y(now).toFixed(1)}" stroke="var(--mu)" stroke-dasharray="3 3"/>
       <path d="${d}" fill="none" stroke="var(--ac)" stroke-width="1.5" stroke-linejoin="round"/>
-      <circle cx="${X(pts[pi].t).toFixed(1)}" cy="${Y(peak).toFixed(1)}" r="3" fill="var(--up)"/>
-    </svg>
+      ${best?`<line data-guide x1="${best.x.toFixed(1)}" x2="${best.x.toFixed(1)}" y1="${P}" y2="${H-P}" stroke="var(--up)" stroke-dasharray="2 4" opacity=".3"/>`:''}
+      ${dots}
+    </svg></div>
     <div class="mstats">
-      <div class="miss"><small>Missed profit</small><b data-missv class="${miss>0.005?'up':'mu'}">${miss>0.005?'+':''}${fmt(miss)} USDT</b></div>
+      <div class="miss"><small>Missed profit</small><b data-missv class="${miss>0.005?'up':'mu'}">${miss>0.005?'+'+fmt(miss)+' USDT':'—'}</b></div>
       <div><small>Net if sold now</small><b data-nowv>${fmt(now)}</b></div>
-      <div><small>Peak price</small><b>${pf(pts[pi].p)}</b></div>
-      <div><small>Peak on</small><b>${stamp(pts[pi].t,span)}</b></div>
-    </div>`;
+      <div><small>Peak price</small><b>${pf(st.p)}</b></div>
+      <div><small>Peak on</small><b>${stamp(st.t,span)}</b></div>
+    </div>
+    <div class="pdet" hidden></div>`;
+  // Open centred on the best peak (or the present, if nothing cleared the floor).
+  const fx=best?best.x:W;
+  requestAnimationFrame(()=>{const sc=el.querySelector('.mscroll');if(!sc||!sc.clientWidth)return;
+    sc.scrollLeft=Math.max(0,Math.min(W-sc.clientWidth,fx-sc.clientWidth/2))});
+}
+// Exit data for one peak: gross, costs and what it was worth versus holding to now.
+function selPeak(el,d,i){
+  const q=el._peaks&&el._peaks[i];if(!q)return;
+  const now=netOf(+el.dataset.qty,px[el.dataset.k]||0),m=Math.max(0,q.net-now);
+  el._sel=i;d.hidden=false;
+  d.innerHTML=`<div class="ph">Peak ${i+1} of ${el._peaks.length}<button class="px" aria-label="Close">×</button></div>
+    <div><small>Exit time</small><b>${new Date(q.t).toLocaleString()}</b></div>
+    <div><small>Exit price</small><b>${pf(q.p)}</b></div>
+    <div><small>Gross proceeds</small><b>${fmt(q.gross)} USDT</b></div>
+    <div><small>Fee + gas</small><b>${fmt(q.fee,4)} USDT</b></div>
+    <div><small>Net received</small><b>${fmt(q.net)} USDT</b></div>
+    <div><small>Vs. now</small><b data-missv2 class="${m>0.005?'up':'mu'}">${m>0.005?'+':''}${fmt(m)} USDT</b></div>`;
+  const g=el.querySelector('[data-guide]');if(g){g.setAttribute('x1',q.x.toFixed(1));g.setAttribute('x2',q.x.toFixed(1))}
+  el.querySelectorAll('.pdot').forEach((c,j)=>c.setAttribute('r',j===i?5:3.5));
+}
+function closePeak(el,d){
+  d.hidden=true;el._sel=-1;
+  const b=el._best,g=el.querySelector('[data-guide]');
+  if(g&&b){g.setAttribute('x1',b.x.toFixed(1));g.setAttribute('x2',b.x.toFixed(1))}
+  el.querySelectorAll('.pdot').forEach(c=>c.setAttribute('r',3.5));
 }
 // Ticker ticks: refresh only the live numbers, never the DOM shell (keeps swipe position).
 function updateMissed(){
+  const num=m=>m>0.005?'+'+fmt(m)+' USDT':'—';
   for(const el of $$('#missed [data-k]')){
-    const d=el.dataset,p=px[d.k];if(!d.peak||!p)continue;
-    const now=netOf(+d.qty,p),miss=Math.max(0,+d.peak-now),y=MY(now,+d.lo,+d.hi).toFixed(1);
-    el.querySelector('[data-nowv]').textContent=fmt(now);
-    const m=el.querySelector('[data-missv]');m.textContent=(miss>0.005?'+':'')+fmt(miss)+' USDT';m.className=miss>0.005?'up':'mu';
-    const l=el.querySelector('[data-now]');l.setAttribute('y1',y);l.setAttribute('y2',y);
+    const p=px[el.dataset.k];if(!el.dataset.peak||!p)continue;
+    const now=netOf(+el.dataset.qty,p);
+    const head=el.querySelector('[data-missv]');
+    if(head){const m=Math.max(0,+el.dataset.peak-now);head.textContent=num(m);head.className=m>0.005?'up':'mu'}
+    const sel=el.querySelector('[data-missv2]');
+    if(sel&&el._sel>=0&&el._peaks&&el._peaks[el._sel]){
+      const m=Math.max(0,el._peaks[el._sel].net-now);sel.textContent=num(m);sel.className=m>0.005?'up':'mu'}
+    const nv=el.querySelector('[data-nowv]');if(nv)nv.textContent=fmt(now);
+    const l=el.querySelector('[data-now]');
+    if(l){const y=MY(now,+el.dataset.lo,+el.dataset.hi).toFixed(1);l.setAttribute('y1',y);l.setAttribute('y2',y)}
   }
 }
 async function renderMissed(force){
@@ -250,6 +297,21 @@ function go(p){
 $$('nav button').forEach(b=>b.onclick=()=>go(b.dataset.page));
 $('#ast').onclick=e=>{const c=e.target.closest('[data-a]');if(c){setSym(c.dataset.a);go('trade')}};
 $('#mrf').onclick=()=>renderMissed(true);
+$('#missed').onclick=e=>{
+  const card=e.target.closest('.mcard');if(!card)return;
+  const d=card.querySelector('.pdet');if(!d)return;
+  const hit=e.target.closest('[data-pk]');
+  if(hit){const i=+hit.dataset.pk;
+    if(!d.hidden&&card._sel===i)closePeak(card,d);else selPeak(card,d,i)}
+  else if(e.target.closest('.px'))closePeak(card,d);
+};
+// Desktop: vertical wheel pans the chart, or the shelf once the chart hits its end.
+$('#missed').addEventListener('wheel',e=>{
+  const sc=e.target.closest('.mscroll')||e.currentTarget,max=sc.scrollWidth-sc.clientWidth;
+  if(Math.abs(e.deltaX)>Math.abs(e.deltaY)||max<1)return;
+  if((e.deltaY>0&&sc.scrollLeft>=max-1)||(e.deltaY<0&&sc.scrollLeft<=1))return;
+  sc.scrollLeft+=e.deltaY;e.preventDefault();
+},{passive:false});
 $$('[data-side]').forEach(b=>b.onclick=()=>setSide(b.dataset.side));
 $$('[data-p]').forEach(b=>b.onclick=()=>{const p=+b.dataset.p/100,s=derive(txs);
   if(side==='buy')$('#amt').value=Math.max(0,((s.usdt-gasUSDT())/(1+CFG.feeRate))*p).toFixed(2);

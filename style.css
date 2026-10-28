@@ -47,12 +47,20 @@ dialog li{display:flex;justify-content:space-between;padding:.55rem .3rem;cursor
 .hrow{display:flex;align-items:center;justify-content:space-between;margin:1.4rem 0 .2rem}.hrow h3{margin:0}
 .hrow button{padding:.3rem .6rem;font-size:.8rem}
 .note{color:var(--mu);font-size:.78rem;margin:.2rem 0 .6rem}
-.shelf{display:flex;gap:.6rem;overflow-x:auto;scroll-snap-type:x mandatory;padding:0 0 .6rem;scrollbar-width:thin}
+.shelf{display:flex;align-items:flex-start;gap:.6rem;overflow-x:auto;scroll-snap-type:x mandatory;padding:0 0 .6rem;scrollbar-width:thin}
 .shelf::-webkit-scrollbar{height:6px}.shelf::-webkit-scrollbar-thumb{background:var(--ln);border-radius:3px}
-.mcard{flex:0 0 min(86%,330px);scroll-snap-align:start;background:var(--sf);border:1px solid var(--ln);border-radius:8px;padding:.7rem}
+.mcard{flex:0 0 min(86%,330px);min-width:0;scroll-snap-align:start;background:var(--sf);border:1px solid var(--ln);border-radius:8px;padding:.7rem}
 .mh{display:flex;justify-content:space-between;align-items:baseline}.mh b{font-size:1rem}
 .msub{color:var(--mu);font-size:.75rem}
-.mchart{display:block;width:100%;height:auto;margin:.4rem 0}
+.mscroll{overflow-x:auto;overscroll-behavior-x:contain;margin:.45rem 0;scrollbar-width:thin}
+.mscroll::-webkit-scrollbar{height:5px}.mscroll::-webkit-scrollbar-thumb{background:var(--ln);border-radius:3px}
+.mchart{display:block;height:96px}
+.phit{fill:transparent;cursor:pointer}
+.pdet{display:grid;grid-template-columns:1fr 1fr;gap:.45rem .6rem;margin-top:.65rem;padding-top:.55rem;border-top:1px solid var(--ln);font-size:.85rem}
+.pdet[hidden]{display:none}
+.pdet small{display:block;color:var(--mu);font-size:.72rem}
+.pdet .ph{grid-column:1/-1;display:flex;justify-content:space-between;align-items:center;color:var(--mu);font-size:.72rem;text-transform:uppercase;letter-spacing:.04em}
+.pdet .px{padding:0 .35rem;background:none;border:0;color:var(--mu);font-size:1.1rem;line-height:1}
 .mstats{display:grid;grid-template-columns:1fr 1fr;gap:.5rem .6rem;font-size:.85rem}
 .miss b{font-size:1.05rem}
 
