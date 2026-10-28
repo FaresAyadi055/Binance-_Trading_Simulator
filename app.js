@@ -145,8 +145,8 @@ function buildMissed(k,qty,s){
   // Wide canvas (~7px per point, capped) so the chart pans instead of squashing.
   const H=96,P=5,W=Math.round(Math.min(1800,Math.max(340,sm.length*7))),t0=s.t0,t1=pts[pts.length-1].t;
   const X=t=>((t-t0)/((t1-t0)||1))*(W-2*P)+P,Y=v=>MY(v,lo,hi);
-  // Every swing high that would have beaten selling now by more than the floor, one dot per episode.
-  const thr=Math.max(CFG.missMinUSDT,qty*nowP*CFG.missMinPct),keep=[];
+  // Every swing high that beats selling now by the floor plus what exiting there would cost, one dot per episode.
+  const exitFee=qty*nowP*CFG.feeRate+gasUSDT(),thr=Math.max(CFG.missMinUSDT,qty*nowP*CFG.missMinPct)+exitFee,keep=[];
   for(let i=2;i<vals.length-2;i++){
     if(vals[i]-now<thr)continue;
     let top=true;for(let j=i-2;j<=i+2;j++)if(vals[j]>vals[i]){top=false;break}
