@@ -30,6 +30,7 @@ const gasUSDT=()=>CFG.gasUnits*CFG.gasPriceGwei*1e-9*(px.BNB||0);
 const fmt=(n,d=2)=>(+n).toLocaleString(undefined,{minimumFractionDigits:d,maximumFractionDigits:d});
 const pf=p=>p>=100?fmt(p,2):p>=1?fmt(p,4):fmt(p,8);
 const toast=m=>{const t=$('#toast');t.textContent=m;t.classList.add('on');clearTimeout(toast.t);toast.t=setTimeout(()=>t.classList.remove('on'),2800)};
+const card=(l,v,cls='',w='')=>`<div class="card ${w}"><small>${l}</small><b class="${cls}">${v}</b></div>`;
 
 /* ---------- market data ---------- */
 function ticks(arr){
@@ -86,14 +87,103 @@ function live(){
   const p=px[sym];if(p){$('#price').textContent=pf(p);const ch=open[sym]?(p/open[sym]-1)*100:0;
     $('#chg').textContent=(ch>=0?'+':'')+fmt(ch)+'% 24h';$('#chg').className=ch>=0?'up':'dn'}
   if($('#analytics').classList.contains('on'))renderAnalytics(s);
+  if($('#assets').classList.contains('on'))renderAssets(s);
 }
 function renderAnalytics(s=derive(txs)){
   let assets=0;const rows=Object.entries(s.pos).filter(([,p])=>p.qty>0);
   for(const[k,p]of rows)assets+=p.qty*(px[k]||0);
-  const net=s.usdt+assets,card=(l,v,cls='',w='')=>`<div class="card ${w}"><small>${l}</small><b class="${cls}">${v}</b></div>`;
+  const net=s.usdt+assets;
   $('#cards').innerHTML=card('Net worth (USDT)',fmt(net),'','wide')+card('Liquid assets (USDT)',fmt(s.usdt))+card('Total gains',fmt(s.gains),'up')+card('Total loss',fmt(s.loss),'dn')
     +card('Success rate',s.sells?fmt(s.wins/s.sells*100,1)+'% ('+s.wins+'/'+s.sells+')':'–')+card('Fees paid',fmt(s.fees,4));
   $('#hold').innerHTML=rows.length?rows.map(([k,p])=>`<div class="row"><span>${k}</span><span>${+p.qty.toFixed(8)} <small>≈ ${fmt(p.qty*(px[k]||0))} USDT</small></span></div>`).join(''):'<p class="est">No assets yet. Buy something on the Trade tab.</p>';
+  renderMissed();
+}
+
+/* ---------- assets ---------- */
+function renderAssets(s=derive(txs)){
+  const rows=Object.entries(s.pos).filter(([,p])=>p.qty>1e-12)
+    .map(([k,p])=>({k,qty:p.qty,cost:p.cost,price:px[k]||0})).sort((a,b)=>b.qty*b.price-a.qty*a.price);
+  let hold=0;for(const r of rows)hold+=r.qty*r.price;
+  const net=s.usdt+hold;
+  const head=card('Net worth (USDT)',fmt(net),'','wide')+card('Crypto holdings',fmt(hold))+card('USDT cash',fmt(s.usdt));
+  const list=rows.map(({k,qty,cost,price})=>{
+    const val=qty*price,avg=cost/qty,pnl=val*(1-CFG.feeRate)-gasUSDT()-cost,pct=cost?pnl/cost*100:0,sh=net?val/net*100:0;
+    return `<div class="ac" data-a="${k}" title="Trade ${k}">
+      <div class="ah"><b>${k}</b><span>${+qty.toFixed(8)} ${k}</span></div>
+      <div class="ag"><div><small>Avg cost</small>${pf(avg)}</div><div><small>Price</small>${pf(price)}</div>
+        <div><small>Value</small>${fmt(val)}</div><div><small>Share</small>${fmt(sh,1)}%</div></div>
+      <div class="ap"><small>Unrealized P&amp;L · net of exit fees</small><b class="${pnl>=0?'up':'dn'}">${pnl>=0?'+':''}${fmt(pnl)} <span class="dim">(${pnl>=0?'+':''}${fmt(pct,1)}%)</span></b></div></div>`}).join('');
+  $('#ast').innerHTML=`<div class="cards">${head}</div>`+(rows.length?`<div class="alist">${list}</div>`:'<p class="est">No assets yet. Buy something on the Trade tab.</p>');
+}
+
+/* ---------- missed opportunities ---------- */
+const IVS=[[1e3,'1s'],[60e3,'1m'],[300e3,'5m'],[900e3,'15m'],[3.6e6,'1h'],[14.4e6,'4h'],[86.4e6,'1d'],[604.8e6,'1w']],MC=new Map();
+let msig=null;
+const lastBuy=k=>{let t=0;for(const x of txs)if(x.action==='buy'&&x.currency===k&&x.timestamp>t)t=x.timestamp;return t};
+const ivFor=ms=>{for(const[sp,iv]of IVS)if(ms<=sp*1000)return iv;return '1M'};
+const netOf=(q,p)=>q*p*(1-CFG.feeRate)-gasUSDT();
+// Best sellable price per candle (high) since the last buy => net USDT after fees & gas.
+async function mseries(k){
+  const from=lastBuy(k),key=`${k}|${from}`,hit=MC.get(key);if(hit)return hit;
+  const d=await(await fetch(`${REST}/klines?symbol=${k}USDT&interval=${ivFor(Date.now()-from)}&startTime=${from}&limit=1000`)).json();
+  if(!Array.isArray(d))throw Error('no candles');
+  const s={t0:from,pts:d.map(c=>({t:c[0],p:+c[2]}))};
+  if(s.pts.length)MC.set(key,s); // empty = brand-new buy; retry next render instead of caching
+  return s;
+}
+function thin(a,max=160){if(a.length<=max)return a.slice();const o=[],st=a.length/max;for(let i=0;i<max;i++)o.push(a[Math.floor(i*st)]);return o}
+const stamp=(t,span)=>{const o={month:'short',day:'numeric'};if(span<1728e5){o.hour='2-digit';o.minute='2-digit'}return new Date(t).toLocaleString(undefined,o)};
+const MY=(v,lo,hi)=>96-5-((v-lo)/((hi-lo)||1))*86;
+function buildMissed(k,qty,s){
+  const el=$(`#missed [data-k="${k}"]`);if(!el)return;
+  const span=Date.now()-s.t0,nowP=px[k]||(s.pts.length?s.pts[s.pts.length-1].p:0),pts=s.pts.concat({t:Date.now(),p:nowP});
+  if(pts.length<2||!nowP){el.innerHTML=`<div class="mh"><b>${k}</b><span class="msub">${+qty.toFixed(8)} ${k}</span></div><p class="est">Bought moments ago — no candles yet. Hit Refresh in a minute.</p>`;return}
+  const vals=pts.map(x=>netOf(qty,x.p));
+  let pi=0;for(let i=1;i<vals.length;i++)if(vals[i]>vals[pi])pi=i;
+  const peak=vals[pi],now=vals[vals.length-1],miss=Math.max(0,peak-now);
+  const lo=Math.min(...vals),hi=Math.max(...vals);
+  const W=300,H=96,P=5,t0=s.t0,t1=pts[pts.length-1].t;
+  const X=t=>((t-t0)/((t1-t0)||1))*(W-2*P)+P,Y=v=>MY(v,lo,hi);
+  const sm=thin(pts.map((p,i)=>({t:p.t,v:vals[i]})));
+  const near=sm.findIndex(q=>q.t>=pts[pi].t);if(near>=0)sm[near]={t:pts[pi].t,v:peak};
+  const d=sm.map((q,i)=>(i?'L':'M')+X(q.t).toFixed(1)+' '+Y(q.v).toFixed(1)).join(' ');
+  el.dataset.qty=qty;el.dataset.peak=peak;el.dataset.lo=lo;el.dataset.hi=hi;
+  el.innerHTML=`<div class="mh"><b>${k}</b><span class="msub">${+qty.toFixed(8)} ${k}</span></div>
+    <svg class="mchart" viewBox="0 0 ${W} ${H}" role="img" aria-label="${k}: best net liquidation value since last buy">
+      <path d="${d} L ${X(t1).toFixed(1)} ${H-P} L ${X(t0).toFixed(1)} ${H-P} Z" fill="var(--ac)" opacity=".08"/>
+      <line data-now x1="${P}" x2="${W-P}" y1="${Y(now).toFixed(1)}" y2="${Y(now).toFixed(1)}" stroke="var(--mu)" stroke-dasharray="3 3"/>
+      <path d="${d}" fill="none" stroke="var(--ac)" stroke-width="1.5" stroke-linejoin="round"/>
+      <circle cx="${X(pts[pi].t).toFixed(1)}" cy="${Y(peak).toFixed(1)}" r="3" fill="var(--up)"/>
+    </svg>
+    <div class="mstats">
+      <div class="miss"><small>Missed profit</small><b data-missv class="${miss>0.005?'up':'mu'}">${miss>0.005?'+':''}${fmt(miss)} USDT</b></div>
+      <div><small>Net if sold now</small><b data-nowv>${fmt(now)}</b></div>
+      <div><small>Peak price</small><b>${pf(pts[pi].p)}</b></div>
+      <div><small>Peak on</small><b>${stamp(pts[pi].t,span)}</b></div>
+    </div>`;
+}
+// Ticker ticks: refresh only the live numbers, never the DOM shell (keeps swipe position).
+function updateMissed(){
+  for(const el of $$('#missed [data-k]')){
+    const d=el.dataset,p=px[d.k];if(!d.peak||!p)continue;
+    const now=netOf(+d.qty,p),miss=Math.max(0,+d.peak-now),y=MY(now,+d.lo,+d.hi).toFixed(1);
+    el.querySelector('[data-nowv]').textContent=fmt(now);
+    const m=el.querySelector('[data-missv]');m.textContent=(miss>0.005?'+':'')+fmt(miss)+' USDT';m.className=miss>0.005?'up':'mu';
+    const l=el.querySelector('[data-now]');l.setAttribute('y1',y);l.setAttribute('y2',y);
+  }
+}
+async function renderMissed(force){
+  const rows=Object.entries(derive(txs).pos).filter(([,p])=>p.qty>1e-12);
+  const sig=rows.map(([k,p])=>`${k}:${lastBuy(k)}:${p.qty}`).join('|');
+  if(!force&&sig===msig)return updateMissed();
+  msig=sig;if(force)MC.clear();
+  const box=$('#missed');if(!box)return;
+  if(!rows.length){box.innerHTML='<p class="est">No open positions yet. Buy something and its best sell value will show up here.</p>';return}
+  box.innerHTML=rows.map(([k,p])=>`<div class="mcard" data-k="${k}"><div class="mh"><b>${k}</b><span class="msub">${+p.qty.toFixed(8)} ${k}</span></div><p class="est">Loading history…</p></div>`).join('');
+  await Promise.all(rows.map(async([k,p])=>{
+    try{buildMissed(k,p.qty,await mseries(k))}
+    catch{const el=$(`#missed [data-k="${k}"]`),lp=el&&el.querySelector('p');if(lp)lp.textContent='Could not load history from Binance.'}
+  }));
 }
 function renderHistory(){
   $('#hist').innerHTML=txs.length?[...txs].reverse().map(t=>{const tr=t.action==='buy'||t.action==='sell';
@@ -154,8 +244,12 @@ function rollback(ts){
 }
 
 /* ---------- wiring ---------- */
-$$('nav button').forEach(b=>b.onclick=()=>{$$('nav button').forEach(x=>x.classList.toggle('on',x===b));$$('.page').forEach(p=>p.classList.toggle('on',p.id===b.dataset.page));
-  if(b.dataset.page==='history')renderHistory();if(b.dataset.page==='analytics')renderAnalytics();if(b.dataset.page==='trade')draw()});
+function go(p){
+  $$('nav button').forEach(x=>x.classList.toggle('on',x.dataset.page===p));$$('.page').forEach(x=>x.classList.toggle('on',x.id===p));
+  if(p==='history')renderHistory();if(p==='analytics')renderAnalytics();if(p==='assets')renderAssets();if(p==='trade')draw()}
+$$('nav button').forEach(b=>b.onclick=()=>go(b.dataset.page));
+$('#ast').onclick=e=>{const c=e.target.closest('[data-a]');if(c){setSym(c.dataset.a);go('trade')}};
+$('#mrf').onclick=()=>renderMissed(true);
 $$('[data-side]').forEach(b=>b.onclick=()=>setSide(b.dataset.side));
 $$('[data-p]').forEach(b=>b.onclick=()=>{const p=+b.dataset.p/100,s=derive(txs);
   if(side==='buy')$('#amt').value=Math.max(0,((s.usdt-gasUSDT())/(1+CFG.feeRate))*p).toFixed(2);

@@ -5,7 +5,7 @@ Minimalist live spot-trading simulator. Vanilla HTML/CSS/JS, no build step, no d
 ## Files
 | File | Role |
 |---|---|
-| `index.html` | Shell: header (balance, credit buttons, feed status), 3 pages (Trade, History, Analytics), coin picker dialog |
+| `index.html` | Shell: header (balance, credit buttons, feed status), 4 pages (Trade, Assets, History, Analytics), coin picker dialog |
 | `style.css` | Dark minimalist theme, CSS variables in `:root`, mobile-first |
 | `app.js` | All logic (ledger, market data, chart, views, import/export) |
 | `sw.js` | Service worker: network-first for same-origin files, cache fallback (offline shell). Bump `C` to invalidate cache |
@@ -53,6 +53,8 @@ Serve over HTTPS or `localhost` (service workers and `crypto.getRandomValues` ne
   - liquid assets = USDT balance; holdings = qty per coin (+ USDT value)
   - success rate = profitable sells ÷ all sells
   - Liquidation = selling to USDT via the normal sell flow (Max button).
+- Assets (`renderAssets()`): one card per open position, sorted by USDT value — qty, avg cost (`cost/qty`), live price, value, share of net worth, and unrealized P&L **net of exit fees** (`value×(1−feeRate) − gas − cost`). Tapping a card selects that symbol and opens Trade. Live-updated while the page is visible, like Analytics.
+- Missed opportunities (`renderMissed()`, `buildMissed()`, `updateMissed()`): horizontal swipe shelf of `#missed` cards, one per open position. Window = **since that asset's last buy**. Fetches `/klines` starting at that timestamp, using the smallest interval whose 1000 candles cover the span (`IVS` ladder: 1s → 1m → 5m → 15m → 1h → 4h → 1d → 1w → 1M). Each candle's **high** is treated as the best price you could have sold at, so the line is net realizable USDT `qty×high×(1−feeRate) − gas` — i.e. profit after fee and gas. The max point is the peak (green dot), the dashed line is "net if sold now", and `missed = max(0, peak − now)`. `MC` caches series per `symbol|lastBuy`; empty results are not cached. Re-render is guarded by a signature (`symbol:lastBuy:qty`) so ticker ticks only patch the live numbers/dashed line (`updateMissed`) and never rebuild the DOM or reset the swipe position. Refresh button forces a refetch.
 
 ## Conventions for agents
 - Keep it dependency-free and single-purpose; never store derived values — add them to `derive()`.

@@ -21,13 +21,17 @@
     <button id="go" class="go">Buy BTC</button>
   </div>
 </section>
+<section id="assets" class="page"><div id="ast"></div></section>
 <section id="history" class="page">
   <div class="bar"><button id="dl">Download JSON</button><button id="imp">Import (overwrite)</button><input id="file" type="file" accept="application/json" hidden></div>
   <div id="hist"></div>
 </section>
-<section id="analytics" class="page"><div id="cards" class="cards"></div><h3>Holdings</h3><div id="hold"></div></section>
+<section id="analytics" class="page"><div id="cards" class="cards"></div><h3>Holdings</h3><div id="hold"></div>
+<div class="hrow"><h3>Missed opportunities</h3><button id="mrf">Refresh</button></div>
+<p class="note">Best net liquidation value since your last buy of each asset — after the 0.1% fee and gas. Swipe for more.</p>
+<div id="missed" class="shelf"></div></section>
 </main>
-<nav><button data-page="trade" class="on">Trade</button><button data-page="history">History</button><button data-page="analytics">Analytics</button></nav>
+<nav><button data-page="trade" class="on">Trade</button><button data-page="assets">Assets</button><button data-page="history">History</button><button data-page="analytics">Analytics</button></nav>
 <dialog id="picker"><input id="q" placeholder="Search coin (BTC, SOL…)"><ul id="list"></ul><button id="close">Close</button></dialog>
 <div id="toast"></div>
 <script src="app.js"></script></body></html>
