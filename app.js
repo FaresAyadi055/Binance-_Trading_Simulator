@@ -70,17 +70,29 @@ async function fill(sd,amount){
 }
 
 /* ---------- chart ---------- */
+// The trade chart shows either the coin's price or the USDT value of the amount you hold.
+let chartView='px';
+function viewToggle(){
+  const q=(derive(txs).pos[sym]||{}).qty||0,has=q>1e-12;
+  if(chartView==='val'&&!has)chartView='px';
+  $$('[data-view]').forEach(b=>{b.classList.toggle('on',b.dataset.view===chartView);
+    if(b.dataset.view==='val'){b.disabled=!has;b.title=has?`USDT value of your ${+q.toFixed(8)} ${sym}`:`Buy some ${sym} to chart its value`}});
+  $('#vsum').textContent=has?`${+q.toFixed(8)} ${sym} ≈ ${fmt(q*(px[sym]||0))} USDT`:`No ${sym} held`;
+}
 function draw(){
   const c=$('#chart'),x=c.getContext('2d'),dpr=devicePixelRatio||1,w=c.clientWidth,h=c.clientHeight;
   c.width=w*dpr;c.height=h*dpr;x.scale(dpr,dpr);
   const n=Math.min(klines.length,Math.floor((w-60)/7)),v=klines.slice(-n);if(!n)return;
-  let hi=Math.max(...v.map(k=>k.h)),lo=Math.min(...v.map(k=>k.l));const pad=(hi-lo)*.1||hi*.001;hi+=pad;lo-=pad;
-  const W=w-60,bw=W/n,Y=p=>h-(p-lo)/(hi-lo)*h;
+  // In `val` mode every price is mapped through qty × price: the candles keep their shape, only the axis changes.
+  const q=(derive(txs).pos[sym]||{}).qty||0,val=chartView==='val'&&q>0,V=p=>val?p*q:p;
+  let hi=V(Math.max(...v.map(k=>k.h))),lo=V(Math.min(...v.map(k=>k.l)));const pad=(hi-lo)*.1||hi*.001;hi+=pad;lo-=pad;
+  const W=w-60,bw=W/n,Y=p=>h-(V(p)-lo)/(hi-lo)*h;
   v.forEach((k,i)=>{x.fillStyle=x.strokeStyle=k.c>=k.o?'#2ebd85':'#f6465d';const cx=i*bw+bw/2;
     x.beginPath();x.moveTo(cx,Y(k.h));x.lineTo(cx,Y(k.l));x.stroke();
     const t=Y(Math.max(k.o,k.c)),b=Y(Math.min(k.o,k.c));x.fillRect(i*bw+bw*.15,t,bw*.7,Math.max(1,b-t))});
   x.fillStyle='#8a94a3';x.font='11px system-ui';x.textAlign='left';
-  [hi,(hi+lo)/2,lo].forEach((p,i)=>x.fillText(pf(p),W+4,[12,h/2,h-4][i]));
+  [hi,(hi+lo)/2,lo].forEach((p,i)=>x.fillText(val?fmt(p):pf(p),W+4,[12,h/2,h-4][i]));
+  x.fillText(val?`${sym} value (USDT)`:`${sym} / USDT`,8,14);
 }
 
 /* ---------- views ---------- */
@@ -90,6 +102,7 @@ function live(){
     $('#chg').textContent=(ch>=0?'+':'')+fmt(ch)+'% 24h';$('#chg').className=ch>=0?'up':'dn'}
   if($('#analytics').classList.contains('on'))renderAnalytics(s);
   if($('#assets').classList.contains('on'))renderAssets(s);
+  if($('#trade').classList.contains('on')){viewToggle();draw()}
 }
 function renderAnalytics(s=derive(txs)){
   let assets=0;const rows=Object.entries(s.pos).filter(([,p])=>p.qty>0);
@@ -331,6 +344,7 @@ $('#missed').addEventListener('wheel',e=>{
   sc.scrollLeft+=e.deltaY;e.preventDefault();
 },{passive:false});
 $$('[data-side]').forEach(b=>b.onclick=()=>setSide(b.dataset.side));
+$$('[data-view]').forEach(b=>b.onclick=()=>{chartView=b.dataset.view;viewToggle();draw()});
 $$('[data-p]').forEach(b=>b.onclick=()=>{const p=+b.dataset.p/100,s=derive(txs);
   if(side==='buy')$('#amt').value=Math.max(0,((s.usdt-gasUSDT())/(1+CFG.feeRate))*p).toFixed(2);
   else{const q=(s.pos[sym]||{}).qty||0;$('#amt').value=p===1?q:Math.floor(q*p*1e8)/1e8}estimate()});

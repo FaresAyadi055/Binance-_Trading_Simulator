@@ -44,7 +44,7 @@ Serve over HTTPS or `localhost` (service workers and `crypto.getRandomValues` ne
 
 ## Features → code map
 - Credit: `credit()`; header buttons add/remove virtual USDT (cannot remove more than balance).
-- Chart: `draw()` — hand-rolled canvas candlesticks, last ~N candles fitting the width, right-side price axis.
+- Chart: `draw()` — hand-rolled canvas candlesticks, last ~N candles fitting the width, right-side axis. The axis shows either the coin's price (`chartView='px'`) or the USDT value of what you hold of it (`'val'`, every price mapped through `qty × price`, so the candles keep their shape and only the axis/caption change). The `.vseg` toggle in `.chartbar` owns it: `viewToggle()` keeps the buttons in sync with `derive(txs).pos[sym]`, disables *Value* with a "Buy some BTC to chart its value" title when nothing is held, and forces the view back to price if the holding disappears or the symbol changes. `#vsum` shows `<qty> SYM ≈ <value> USDT`, or "No SYM held". `live()` re-runs `viewToggle()`/`draw()` while the Trade page is open so a fill re-scales the chart immediately.
 - Coin selector: `#picker` dialog, `renderPicker()`, search filters all `*USDT` pairs seen on the ticker, sorted by quote volume.
 - History: `renderHistory()`, `download()` (JSON `{version, exported_at, transactions:[{transaction:{…}}]}`), `importFile()` (accepts that format, a bare array, or unwrapped records; validates fields and non-negative USDT replay; **overwrites** history after confirmation), `rollback(ts)` (deletes every transaction with `timestamp > ts`, keeping the chosen one, after confirmation).
 - Analytics (`renderAnalytics()`, live-updated each ticker tick):

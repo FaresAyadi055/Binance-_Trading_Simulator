@@ -13,6 +13,12 @@ main{flex:1;overflow:auto;padding:1rem;max-width:760px;width:100%;margin:0 auto}
 .top{display:flex;justify-content:space-between;align-items:center;margin-bottom:.6rem}
 .sym{font-weight:600}.big{font-size:1.6rem;display:block;text-align:right}#chg{display:block;text-align:right;font-size:.85rem}
 canvas{width:100%;height:280px;background:var(--sf);border:1px solid var(--ln);border-radius:8px;display:block}
+.chartbar{display:flex;align-items:center;justify-content:space-between;gap:.6rem;margin-bottom:.4rem}
+.chartbar small{color:var(--mu);font-size:.78rem}
+.vseg{display:flex;gap:.3rem}
+.vseg button{padding:.25rem .6rem;font-size:.78rem;color:var(--mu)}
+.vseg .on{background:var(--ac);border-color:var(--ac);color:#1a1400}
+button:disabled{opacity:.45;cursor:not-allowed}
 .panel{margin-top:1rem;display:grid;gap:.6rem}
 .seg{display:grid;grid-template-columns:1fr 1fr;gap:.4rem}.seg .on[data-side=buy]{background:var(--up);border-color:var(--up);color:#06150f}.seg .on[data-side=sell]{background:var(--dn);border-color:var(--dn);color:#fff}
 .pct{display:grid;grid-template-columns:repeat(4,1fr);gap:.4rem}
