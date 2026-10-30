@@ -44,10 +44,14 @@ def main():
           f"  ({int(k[8])} trades, vol={float(k[5]):.4f} BTC)")
 
     # 1m candle for the minute, so the 1s print can be put in context.
-    km = get("/api/v3/klines", symbol=SYMBOL, interval="1m",
-             startTime=TS - (TS % 60000), endTime=TS, limit=1)[0]
-    print(f"1m kline: open={float(km[1]):.2f}  high={float(km[2]):.2f}  "
-          f"low={float(km[3]):.2f}  close={float(km[4]):.2f}")
+    kms = get("/api/v3/klines", symbol=SYMBOL, interval="1m",
+              startTime=TS - (TS % 60000), endTime=TS, limit=1)
+    if kms:
+        km = kms[0]
+        print(f"1m kline: open={float(km[1]):.2f}  high={float(km[2]):.2f}  "
+              f"low={float(km[3]):.2f}  close={float(km[4]):.2f}")
+    else:
+        print("1m kline: no data returned")
 
     print()
     for label, price in (("close", c), ("low", l), ("high", h)):

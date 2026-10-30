@@ -59,8 +59,8 @@ async function seedPrices(){
 // Gas and the live mark are priced off the ticker: wait for it so a chart is never built gas-less.
 const priced=async k=>{for(let i=0;i<40&&(!px[k]||!px.BNB);i++)await new Promise(r=>setTimeout(r,100))};
 // Fill simulation: walk the real order book (depth 1000) => genuine slippage.
-async function fill(sd,amount){
-  const[d,{serverTime:ts}]=await Promise.all([fetch(`${REST}/depth?symbol=${sym}USDT&limit=1000`).then(r=>r.json()),fetch(`${REST}/time`).then(r=>r.json())]);
+async function fill(sd,amount,cur=sym){
+  const[d,{serverTime:ts}]=await Promise.all([fetch(`${REST}/depth?symbol=${cur}USDT&limit=1000`).then(r=>r.json()),fetch(`${REST}/time`).then(r=>r.json())]);
   const mid=(+d.bids[0][0]+ +d.asks[0][0])/2;let qty=0,quote=0,left=amount;
   if(sd==='buy'){for(const[p,q]of d.asks){const pr=+p,c=pr*+q;if(c>=left){qty+=left/pr;quote+=left;left=0;break}qty+=+q;quote+=c;left-=c}}
   else{for(const[p,q]of d.bids){const pr=+p,qy=+q;if(qy>=left){qty+=left;quote+=left*pr;left=0;break}qty+=qy;quote+=qy*pr;left-=qy}}
@@ -82,7 +82,7 @@ function viewToggle(){
 function draw(){
   const c=$('#chart'),x=c.getContext('2d'),dpr=devicePixelRatio||1,w=c.clientWidth,h=c.clientHeight;
   c.width=w*dpr;c.height=h*dpr;x.scale(dpr,dpr);
-  const n=Math.min(klines.length,Math.floor((w-60)/7)),v=klines.slice(-n);if(!n)return;
+  const n=Math.min(klines.length,Math.floor((w-60)/7)),v=klines.slice(-n);if(!(n>0))return;
   // In `val` mode every price is mapped through qty × price: the candles keep their shape, only the axis changes.
   const q=(derive(txs).pos[sym]||{}).qty||0,val=chartView==='val'&&q>0,V=p=>val?p*q:p;
   let hi=V(Math.max(...v.map(k=>k.h))),lo=V(Math.min(...v.map(k=>k.l)));const pad=(hi-lo)*.1||hi*.001;hi+=pad;lo-=pad;
@@ -270,7 +270,7 @@ function renderHistory(){
     <small>${tr?'@ '+pf(t.price)+' · slippage '+fmt(t.slippage_usdt||0,4):''}</small><div class="r"><button data-rb="${t.timestamp}">Rollback here</button></div></div>`}).join('')
     :'<p class="est">No transactions yet.</p>';
 }
-function setSide(s){side=s;$$('[data-side]').forEach(b=>b.classList.toggle('on',b.dataset.side===s));
+function setSide(s){side=s;eTok++;$$('[data-side]').forEach(b=>b.classList.toggle('on',b.dataset.side===s));
   $('#amtlbl').textContent=s==='buy'?'Amount (USDT)':`Amount (${sym})`;$('#go').textContent=`${s==='buy'?'Buy':'Sell'} ${sym}`;$('#amt').value='';$('#est').textContent='Enter an amount to see the fill price, slippage and fees.'}
 function setSym(s){const old=sym;sym=s;$('#pick').textContent=s+'/USDT ▾';setSide(side);klines=[];loadKlines();
   if(ws&&ws.readyState===1){ws.send(JSON.stringify({method:'UNSUBSCRIBE',params:[`${old.toLowerCase()}usdt@kline_1s`],id:2}));ws.send(JSON.stringify({method:'SUBSCRIBE',params:[`${s.toLowerCase()}usdt@kline_1s`],id:3}))}live()}
@@ -281,37 +281,60 @@ function renderPicker(){
 }
 
 /* ---------- trading ---------- */
+let eTok=0;
 async function estimate(){
-  const v=+$('#amt').value;if(!(v>0))return;
-  try{const f=await fill(side,v),fee=f.quote*CFG.feeRate+gasUSDT();
+  const tok=++eTok,v=+$('#amt').value,sd=side,cur=sym;
+  if(!(v>0)){$('#est').textContent='Enter an amount to see the fill price, slippage and fees.';return}
+  try{const f=await fill(sd,v,cur),fee=f.quote*CFG.feeRate+gasUSDT();
+    if(tok!==eTok)return; // a newer estimate, side or symbol change superseded this one
     $('#est').textContent=`Avg fill ${pf(f.avg)} (mid ${pf(f.mid)})\nSlippage ${fmt(f.slip,4)} USDT · Fee ${fmt(f.quote*CFG.feeRate,4)} + gas ${fmt(gasUSDT(),4)}\n${side==='buy'?'You get':'You receive'} ${side==='buy'?+f.qty.toFixed(8)+' '+sym:fmt(f.quote-fee)+' USDT'}`}
-  catch(e){$('#est').textContent=e.message}
+  catch(e){if(tok===eTok)$('#est').textContent=e.message}
 }
 async function trade(){
   const v=+$('#amt').value;if(!(v>0))return toast('Enter an amount');if(busy)return;busy=true;$('#go').disabled=true;
-  try{const s=derive(txs),f=await fill(side,v),fee=f.quote*CFG.feeRate+gasUSDT();
-    if(side==='buy'&&f.quote+fee>s.usdt+1e-9)throw Error('Not enough USDT (fees included)');
-    if(side==='sell'&&v>((s.pos[sym]||{}).qty||0)+1e-9)throw Error(`Not enough ${sym}`);
-    txs.push({id:uuid7(f.ts),action:side,currency:sym,amount:f.qty,amount_in_USDT:f.quote,fees:fee,timestamp:f.ts,price:f.avg,slippage_usdt:f.slip});
-    save();toast(`${side==='buy'?'Bought':'Sold'} ${+f.qty.toFixed(8)} ${sym}`);$('#amt').value='';live()}
+  // Freeze side and symbol now: the user may switch coin while the order book is being fetched.
+  const sd=side,cur=sym;
+  try{if(!px.BNB)throw Error('BNB price not loaded yet, gas cannot be priced');
+    const f=await fill(sd,v,cur),fee=f.quote*CFG.feeRate+gasUSDT(),s=derive(txs);
+    if(sd==='buy'&&f.quote+fee>s.usdt+1e-9)throw Error('Not enough USDT (fees included)');
+    if(sd==='sell'&&v>((s.pos[cur]||{}).qty||0)+1e-9)throw Error(`Not enough ${cur}`);
+    txs.push({id:uuid7(f.ts),action:sd,currency:cur,amount:f.qty,amount_in_USDT:f.quote,fees:fee,timestamp:f.ts,price:f.avg,slippage_usdt:f.slip});
+    save();toast(`${sd==='buy'?'Bought':'Sold'} ${+f.qty.toFixed(8)} ${cur}`);if(cur===sym&&sd===side)$('#amt').value='';live()}
   catch(e){toast(e.message)}finally{busy=false;$('#go').disabled=false}
 }
 async function credit(kind){
   const v=+prompt(kind==='deposit'?'USDT to add:':'USDT to remove:');if(!(v>0))return;
   if(kind==='withdraw'&&v>derive(txs).usdt)return toast('Not enough liquid USDT');
   try{const{serverTime:ts}=await(await fetch(`${REST}/time`)).json();
+    if(kind==='withdraw'&&v>derive(txs).usdt)return toast('Not enough liquid USDT'); // balance may have changed during the request
     txs.push({id:uuid7(ts),action:kind,currency:'USDT',amount:v,amount_in_USDT:v,fees:0,timestamp:ts});save();live();renderHistory()}
   catch{toast('Could not reach Binance time API')}
 }
 
 /* ---------- history tools ---------- */
 function download(){const b=new Blob([JSON.stringify({version:1,exported_at:Date.now(),transactions:txs.map(t=>({transaction:t}))},null,2)],{type:'application/json'});
-  const a=document.createElement('a');a.href=URL.createObjectURL(b);a.download=`binance-sim-${Date.now()}.json`;a.click();URL.revokeObjectURL(a.href)}
+  const a=document.createElement('a');a.href=URL.createObjectURL(b);a.download=`binance-sim-${Date.now()}.json`;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(a.href),4000)}
+// Every record must be well-formed, and replaying in order must never drive USDT or a position below zero (not just the final balance).
+function validLedger(list){
+  const num=v=>v!==null&&v!==''&&v!==undefined&&Number.isFinite(+v);
+  const s={usdt:0,pos:{}};
+  for(const t of list){
+    if(!t||!t.id||!['buy','sell','deposit','withdraw'].includes(t.action)||typeof t.currency!=='string'||!t.currency)return false;
+    if(!num(t.amount)||!num(t.amount_in_USDT)||!num(t.timestamp)||(t.fees!==undefined&&!num(t.fees)))return false;
+    const a=+t.amount,u=+t.amount_in_USDT,f=+t.fees||0;
+    if(a<0||u<0||f<0||t.timestamp<0)return false;
+    if(t.action==='deposit')s.usdt+=u;
+    else if(t.action==='withdraw')s.usdt-=u;
+    else if(t.action==='buy'){s.usdt-=u+f;(s.pos[t.currency]??={qty:0}).qty+=a}
+    else{const p=s.pos[t.currency];if(!p||p.qty<a-1e-9)return false;p.qty-=a;s.usdt+=u-f}
+    if(s.usdt<-1e-6)return false;
+  }
+  return new Set(list.map(t=>t.id)).size===list.length;
+}
 async function importFile(f){
   try{const j=JSON.parse(await f.text()),raw=Array.isArray(j)?j:j.transactions;
     const list=raw.map(x=>x.transaction||x).sort((a,b)=>a.timestamp-b.timestamp);
-    const ok=list.every(t=>t.id&&['buy','sell','deposit','withdraw'].includes(t.action)&&isFinite(+t.amount)&&isFinite(+t.amount_in_USDT)&&isFinite(+t.fees)&&isFinite(+t.timestamp));
-    if(!ok||derive(list).usdt<-1e-6)throw Error();
+    if(!validLedger(list))throw Error();
     if(!confirm(`Overwrite current history with ${list.length} imported transactions?`))return;
     txs=list;save();renderHistory();live();toast('History imported')}
   catch{toast('Invalid or inconsistent history file')}
@@ -346,7 +369,7 @@ $('#missed').addEventListener('wheel',e=>{
 $$('[data-side]').forEach(b=>b.onclick=()=>setSide(b.dataset.side));
 $$('[data-view]').forEach(b=>b.onclick=()=>{chartView=b.dataset.view;viewToggle();draw()});
 $$('[data-p]').forEach(b=>b.onclick=()=>{const p=+b.dataset.p/100,s=derive(txs);
-  if(side==='buy')$('#amt').value=Math.max(0,((s.usdt-gasUSDT())/(1+CFG.feeRate))*p).toFixed(2);
+  if(side==='buy')$('#amt').value=(Math.floor(Math.max(0,((s.usdt-gasUSDT())/(1+CFG.feeRate))*p)*100)/100).toFixed(2);
   else{const q=(s.pos[sym]||{}).qty||0;$('#amt').value=p===1?q:Math.floor(q*p*1e8)/1e8}estimate()});
 $('#amt').oninput=()=>{clearTimeout(estTimer);estTimer=setTimeout(estimate,350)};
 $('#go').onclick=trade;$('#add').onclick=()=>credit('deposit');$('#rem').onclick=()=>credit('withdraw');
